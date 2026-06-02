@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="SecuPi - Raspberry Pi Edge AI Motion Detection and Security Monitoring System">
+    <title>SecuPi – Smart AI Security Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        /* Beautiful sliding toggle switch slider */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 26px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        /* Hide standard checkbox input */
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        /* The sliding track */
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #cbd5e1;
+            transition: .3s;
+            border-radius: 26px;
+            display: block;
+        }
+        /* The sliding knob */
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+        }
+        /* Color when switch is turned ON */
+        input:checked + .slider {
+            background-color: var(--primary-dark) !important;
+        }
+        /* Move the knob to the right on ON */
+        input:checked + .slider:before {
+            transform: translateX(24px);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="page-wrapper">
+
+        <!-- ===================== -->
+        <!-- SECTION 1: HEADER     -->
+        <!-- ===================== -->
+        <header class="header" id="top">
+            <div class="header-inner">
+                <div class="logo-group">
+                    <div class="logo-icon">
+                        <i class="fa-solid fa-shield-halved"></i>
+                    </div>
+                    <div class="logo-text">
+                        <h1>SecuPi</h1>
+                        <p>Motion Detection &amp; Image Capture System</p>
+                    </div>
+                </div>
+                <div class="status-badge" id="status-badge">
+                    <span class="badge-dot"></span>
+                    <span class="badge-label" id="badge-label">Standby Monitoring</span>
+                </div>
+            </div>
+        </header>
+        <main class="main">
+
+            <!-- ========================= -->
+            <!-- LIVE ALERT PANEL          -->
+            <!-- ========================= -->
+            <div class="live-alert-panel hidden" id="live-alert-panel">
+                <div class="live-alert-icon">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                </div>
+                <div class="live-alert-content">
+                    <div class="live-alert-title">🚨 Security Alert</div>
+                    <div class="live-alert-message" id="live-alert-message">Intruder/Tamper Detected</div>
+                    <div class="live-alert-time" id="live-alert-time">Time: --:--</div>
+                </div>
+                <button class="btn-close-alert" id="btn-close-alert" title="Dismiss Alert">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <!-- ========================================= -->
+            <!-- SECTION 0: LIVE AI SURVEILLANCE FEED     -->
+            <!-- ========================================= -->
+            <section class="section">
+                <div class="section-label">Live AI Surveillance</div>
+                <div class="card latest-card" id="live-card">
+                    <!-- Live feed window (Always Active) -->
+                    <div class="img-frame" id="live-frame">
+                        <img id="live-img" src="/video_feed" alt="Live AI Camera Feed" class="capture-img">
+                    </div>
+                    
+                    <!-- AI Mode Switch Toggle -->
+                    <div class="ai-toggle-container" style="display:flex; align-items:center; justify-content:space-between; background:var(--bg-alt); padding:1rem 1.25rem; border-radius:var(--radius-sm); border:1.5px solid var(--border); margin-bottom:0.8rem;">
+                        <div style="display:flex; align-items:center; gap:0.8rem;">
+                            <span style="font-size:1.3rem; color:var(--primary-dark);"><i class="fa-solid fa-brain"></i></span>
+                            <div>
+                                <strong style="font-size:0.95rem; display:block; color:var(--text);">Always-On AI Analysis</strong>
+                                <span style="font-size:0.75rem; color:var(--text-muted);">Process object and face recognition continuously without motion triggers</span>
+                            </div>
+                        </div>
+                        <!-- Sliding switch markup -->
+                        <label class="switch">
+                            <input type="checkbox" id="ai-toggle-input">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+
+                    <!-- Live hardware sensors -->
+                    <div class="latest-meta">
+                        <div class="meta-item" id="sensor-pir">
+                            <span class="meta-icon"><i class="fa-solid fa-person-running"></i></span>
+                            <div>
+                                <div class="meta-label">PIR Sensor</div>
+                                <div class="meta-value" id="val-motion">Clear</div>
+                            </div>
+                        </div>
+                        <div class="meta-item" id="sensor-dist">
+                            <span class="meta-icon"><i class="fa-solid fa-ruler-horizontal"></i></span>
+                            <div>
+                                <div class="meta-label">Ultrasonic Range</div>
+                                <div class="meta-value"><span id="val-distance">0.0</span> cm</div>
+                            </div>
+                        </div>
+                        <div class="meta-item" id="sensor-light">
+                            <span class="meta-icon"><i class="fa-solid fa-network-wired"></i></span>
+                            <div>
+                                <div class="meta-label">System State</div>
+                                <div class="meta-value accent" id="val-status">Standby</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            <br>
+
+            <!-- ========================= -->
+            <!-- SECTION 1: LATEST DETECT  -->
+            <!-- ========================= -->
+            <section class="section">
+                <div class="section-label">Latest Detection Capture</div>
+                <div class="card latest-card">
+                    <!-- Info row -->
+                    <div class="latest-meta" id="latest-meta">
+                        <div class="meta-item">
+                            <span class="meta-icon"><i class="fa-regular fa-clock"></i></span>
+                            <div>
+                                <div class="meta-label">Time</div>
+                                <div class="meta-value" id="det-time">—</div>
+                            </div>
+                        </div>
+                        <div class="meta-item">
+                            <span class="meta-icon"><i class="fa-regular fa-calendar"></i></span>
+                            <div>
+                                <div class="meta-label">Date</div>
+                                <div class="meta-value" id="det-date">—</div>
+                            </div>
+                        </div>
+                        <div class="meta-item">
+                            <span class="meta-icon"><i class="fa-solid fa-circle-dot"></i></span>
+                            <div>
+                                <div class="meta-label">Status</div>
+                                <div class="meta-value accent" id="det-status">—</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Image preview -->
+                    <div class="img-frame" id="latest-frame">
+                        <img id="latest-img" src="" alt="Latest Detection" class="capture-img hidden">
+                        <div class="img-empty" id="latest-empty">
+                            <i class="fa-solid fa-camera-slash"></i>
+                            <span>No detection yet</span>
+                        </div>
+                    </div>
+
+
+                </div>
+            </section>
+            <br><br>
+
+            <!-- ========================= -->
+            <!-- SECTION 2: UNKNOWN ALERTS -->
+            <!-- ========================= -->
+            <section class="section" id="sec-unknown-alerts">
+                <div class="section-label">Active Intrusion Warnings</div>
+                <div class="unknown-alerts-container" id="unknown-alerts-container">
+                    <!-- Populated by JS -->
+                </div>
+            </section>
+            <br><br>
+
+            <!-- ========================= -->
+            <!-- SECTION 2.5: SERVER LOGS  -->
+            <!-- ========================= -->
+            <section class="section" id="sec-server-logs">
+                <div class="section-label">Live Server System Logs</div>
+                <div class="card" style="background:#1e1e1e; color:#00ff00; font-family:monospace; padding:1.5rem; height:220px; overflow-y:auto; border:2px solid #333; border-radius:var(--radius-sm);">
+                    <ul id="server-logs-list" style="list-style:none; padding:0; margin:0; font-size:0.85rem; line-height:1.6;">
+                        <li style="color:#888;">[System] Waiting for server stream...</li>
+                    </ul>
+                </div>
+            </section>
+            <br><br>
+
+            <!-- ========================= -->
+            <!-- SECTION 3: DETECTION LOGS -->
+            <!-- ========================= -->
+            <section class="section">
+                <div class="section-header-row">
+                    <div class="section-label">Detection Activity Logs</div>
+                    <div class="count-badge" id="logs-count">0 logs</div>
+                </div>
+
+                <div class="card logs-card">
+                    <div class="table-responsive">
+                        <table class="logs-table">
+                            <thead>
+                                <tr>
+                                    <th>Image</th>
+                                    <th>Detection ID</th>
+                                    <th>Type</th>
+                                    <th>Person Name</th>
+                                    <th>Date</th>
+                                    <th>Time</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="logs-table-body">
+                                <!-- Populated by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+            <br><br>
+
+            <!-- ===================== -->
+            <!-- TEAM FOOTER           -->
+            <!-- ===================== -->
+            <footer class="team-footer">
+                <div class="footer-top">
+                    <!-- Section 1: Project Info -->
+                    <div class="footer-col project-info">
+                        <div class="footer-logo">
+                            <i class="fa-solid fa-shield-halved"></i>
+                            <h3>SecuPi</h3>
+                        </div>
+                        <p class="project-tagline">Smart Motion Detection &amp; Security Monitoring System</p>
+                        <p class="project-desc">A Raspberry Pi based surveillance system that detects motion, captures
+                            images, and stores detection events for monitoring purposes.</p>
+                        <div class="project-version">
+                            <span>Version 1.0</span>
+                        </div>
+                    </div>
+
+                    <!-- Section 2: Team Info -->
+                    <div class="footer-col team-info">
+                        <h3>Team 6</h3>
+                        <div class="team-grid">
+                            <div class="team-card">
+                                <div class="team-avatar">
+                                    <i class="fa-solid fa-gears"></i>
+                                </div>
+                                <div class="team-card-details">
+                                    <div class="team-member-name">Gaurav Kumar</div>
+                                    <div class="team-member-role">Frontend Developer <br> Hardware implementation</div>
+                                </div>
+                            </div>
+                            <div class="team-card">
+                                <div class="team-avatar">
+                                    <i class="fa-solid fa-code"></i>
+                                </div>
+                                <div class="team-card-details">
+                                    <div class="team-member-name">Parth</div>
+                                    <div class="team-member-role">Backend Developer <br> Intergration</div>
+                                </div>
+                            </div>
+
+                            <div class="team-card">
+                                <div class="team-avatar">
+                                    <i class="fa-solid fa-microchip"></i>
+                                </div>
+                                <div class="team-card-details">
+                                    <div class="team-member-name">Aditya Verma</div>
+                                    <div class="team-member-role">Backend Engineer <br> Testing </div>
+                                </div>
+                            </div>
+                            <div class="team-card">
+                                <div class="team-avatar">
+                                    <i class="fa-solid fa-sitemap"></i>
+                                </div>
+                                <div class="team-card-details">
+                                    <div class="team-member-name">Vanshika Chawla</div>
+                                    <div class="team-member-role"> Hardware implementation <br> Team coordinator</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section 3: Connect with Us -->
+                    <div class="footer-col connect-us">
+                        <h3>Connect with Us</h3>
+                        <div class="connect-links">
+                            <a href="https://linkedin.com" target="_blank" rel="noopener noreferrer"
+                                class="linkedin-btn">
+                                <i class="fa-brands fa-linkedin"></i>
+                                <span>Gaurav Kumar </span>
+                            </a>
+                            <br>
+                            <a href="https://linkedin.com" target="_blank" rel="noopener noreferrer"
+                                class="linkedin-btn">
+                                <i class="fa-brands fa-linkedin"></i>
+                                <span>Parth Sharma</span>
+                            </a>
+                            <br>
+
+                            <a href="https://linkedin.com" target="_blank" rel="noopener noreferrer"
+                                class="linkedin-btn">
+                                <i class="fa-brands fa-linkedin"></i>
+                                <span>Aryan Verma </span>
+                            </a>
+                            <br>
+                            <a href="https://linkedin.com" target="_blank" rel="noopener noreferrer"
+                                class="linkedin-btn">
+                                <i class="fa-brands fa-linkedin"></i>
+                                <span>Vanshika Chawla</span>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Bar -->
+                <div class="footer-bottom">
+                    <div class="bottom-right">
+                        <p>&copy; 2026 SecuPi Project &bull; Developed by Team 6</p>
+                    </div>
+                    <div class="bottom-left">
+                        <p>Academic Project | College Prototype <br> \\Technology Business Incubator-TBI
+                            <br> Graphic Era University | Dehradun
+                        </p>
+                        <p class="bottom-sub">Raspberry Pi Based Motion Detection Security System</p>
+                    </div>
+                </div>
+            </footer>
+
+    </div><!-- end .page-wrapper -->
+
+    <!-- ===================== -->
+    <!-- DETAILED DETECTION MODAL -->
+    <!-- ===================== -->
+    <div class="modal hidden" id="detail-modal">
+        <div class="modal-overlay" id="modal-overlay"></div>
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="modal-title">Detection Event Details</h3>
+                <button class="btn-close-modal" id="btn-close-modal" title="Close Modal">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-img-wrap">
+                    <img id="modal-img" src="" alt="Detection Snapshot">
+                </div>
+                <div class="modal-info-grid" id="modal-info-grid">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+
+</html>
