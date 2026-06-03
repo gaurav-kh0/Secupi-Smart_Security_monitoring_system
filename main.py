@@ -32,8 +32,8 @@ cv2.imwrite("static/captures/sample.png", fallback_canvas)
 # ==========================================
 # 0. TELEGRAM CONFIGURATION
 # ==========================================
-TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
+TELEGRAM_BOT_TOKEN = "8797436845:AAF6gcy2SjuqvxEvZ06jt6Th2iNbvOnw5lU"
+TELEGRAM_CHAT_ID = "8198822394"
 
 # ==========================================
 # 1. HARDWARE CONFIGURATION (RPi 5 GPIO BCM)
@@ -63,6 +63,12 @@ LAST_KNOWN_FACES = []
 LAST_KNOWN_OBJECTS = []
 RECENT_LOGS = [] 
 DETECTION_EVENTS = [] 
+
+REPORT_STATS = {
+    "auth_entries": 0,
+    "intruders": 0,
+    "motion_events": 0
+}
 
 SYSTEM_STATE = {
     "motion": False,
@@ -182,11 +188,17 @@ if face_recognition is not None:
                 try:
                     img_path = os.path.join(faces_folder, filename)
                     auth_image = face_recognition.load_image_file(img_path)
-                    auth_encoding = face_recognition.face_encodings(auth_image, num_jitters=1)[0]
-                    name = os.path.splitext(filename)[0].capitalize()
-                    known_face_encodings.append(auth_encoding)
-                    known_face_names.append(name)
-                    print(f"Authorized Profile Loaded: {name}")
+                    
+                    # Calibration: Extract exact facial bounds to isolate math from background noise
+                    auth_bounds = face_recognition.face_locations(auth_image)
+                    if len(auth_bounds) > 0:
+                        # Massive performance boost: Jitter the image 25 times during bootup to create 
+                        # a highly resilient mathematical profile resistant to weird angles and bad lighting
+                        auth_encoding = face_recognition.face_encodings(auth_image, known_face_locations=auth_bounds, num_jitters=25)[0]
+                        name = os.path.splitext(filename)[0].capitalize()
+                        known_face_encodings.append(auth_encoding)
+                        known_face_names.append(name)
+                        print(f"Authorized Profile Calibrated: {name}")
                 except Exception as e:
                     pass
 
@@ -206,6 +218,34 @@ def send_telegram_alert(frame_to_send, trigger_reason):
         requests.post(url, files=files, data=data)
     except Exception as e:
         pass
+
+def send_daily_report():
+    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        return
+    
+    msg = (f"📊 *SecuPi Daily Report* 📊\n\n"
+           f"Total Motion Events: {REPORT_STATS['motion_events']}\n"
+           f"Authorized Entries: {REPORT_STATS['auth_entries']}\n"
+           f"Unknown Intruders: {REPORT_STATS['intruders']}\n")
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': msg, 'parse_mode': 'Markdown'})
+    except:
+        pass
+    
+    # Reset stats
+    REPORT_STATS["auth_entries"] = 0
+    REPORT_STATS["intruders"] = 0
+    REPORT_STATS["motion_events"] = 0
+
+def report_worker():
+    # 3-Hour Demo Report
+    time.sleep(3 * 3600)
+    send_daily_report()
+    # 24-Hour Loop
+    while True:
+        time.sleep(24 * 3600)
+        send_daily_report()
 
 # ==========================================
 # THREAD 2: HARDWARE MONITOR (Sensors)
@@ -261,6 +301,7 @@ def hardware_loop():
             SYSTEM_STATE["motion"] = True
             SYSTEM_STATE["status"] = "Active - Motion Alert Triggered"
             if not motion_triggered:
+                REPORT_STATS["motion_events"] += 1
                 write_log("HARDWARE", "Motion detected, AI processes active.")
                 motion_triggered = True
         elif time.time() - LAST_MOTION_TIME > IDLE_TIMEOUT:
@@ -281,6 +322,8 @@ def hardware_loop():
 def process_ai():
     global LATEST_FRAME, LAST_KNOWN_FACES, LAST_KNOWN_OBJECTS, LAST_ALERT_TIME
 
+    TRACKED_FACES = {} # Maps YOLO ID -> (Name, Confidence, AuthStatus)
+
     camera = cv2.VideoCapture(0)
     while True:
         success, frame = camera.read()
@@ -297,92 +340,114 @@ def process_ai():
         auth_spotted = False
         current_time = time.time()
 
-        # Perform YOLO and Face AI *only* if enabled by motion or switch
+        # Perform YOLO and Face AI *only* if enabled by motion
         if ai_enabled:
-            # Step 1: YOLO Object Detection
-            results = yolo_model(frame, verbose=False)
+            # Step 1: YOLO Object Detection with Persistent Tracking (improves multi-person stability)
+            results = yolo_model.track(frame, persist=True, imgsz=320, verbose=False)
+            
             for box in results[0].boxes:
                 conf = float(box.conf[0])
-                if conf > 0.30:
+                if conf > 0.25: # Ultra-low adaptive minimum to catch seated/occluded people
                     class_id = int(box.cls[0])
                     class_name = yolo_model.names[class_id]
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     
-                    if class_id == 0: human_in_frame = True 
-                    else: current_objects.append(((x1, y1, x2, y2), f"{class_name} {int(conf*100)}%"))
-
-            faces_processed = []
-
-            # Step 2: Face Recognition Pipeline
-            if human_in_frame:
-                small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-                rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-                
-                face_locations = face_recognition.face_locations(rgb_small_frame)
-                face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
-                
-                for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
-                    matches = face_recognition.compare_faces(known_face_encodings, face_encoding, tolerance=0.55)
-                    name = "Unknown Intruder"
-                    
-                    face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
-                    if len(face_distances) > 0:
-                        best_match_index = np.argmin(face_distances)
-                        if matches[best_match_index]:
-                            name = known_face_names[best_match_index]
-                            auth_spotted = True
-                    
-                    if name == "Unknown Intruder": 
-                        intruder_spotted = True
-                    
-                    top *= 4; right *= 4; bottom *= 4; left *= 4
-                    current_faces.append(((top, right, bottom, left), name))
-                    faces_processed.append(name)
-
-                    # Event log & capture (with a 2-minute testing cooldown)
-                    last_seen = PERSON_COOLDOWNS.get(name, 0)
-                    if current_time - last_seen > 120:
-                        PERSON_COOLDOWNS[name] = current_time
+                    if class_id == 0:
+                        human_in_frame = True 
                         
-                        # Annotate the picture frame explicitly to embed AI model markers
-                        capture_frame = frame.copy()
-                        color = (0, 255, 0) if name != "Unknown Intruder" else (0, 0, 255)
-                        cv2.rectangle(capture_frame, (left, top), (right, bottom), color, 3)
-                        cv2.putText(capture_frame, name, (left + 6, bottom - 8), cv2.FONT_HERSHEY_DUPLEX, 0.7, color, 2)
+                        # Smart ID Caching: Check if YOLO has already locked onto this person
+                        track_id = int(box.id[0]) if box.id is not None else -1
+                        name = "Unknown"
+                        confidence_score = 10
+                        auth_spotted = False
+                        push_alert = False
                         
-                        confidence_score = 35 if name == "Unknown Intruder" else int((1 - face_distances[best_match_index]) * 100) if len(face_distances) > 0 else 92
-                        add_detection_event("Unknown" if name == "Unknown Intruder" else "Recognized", name, confidence_score, capture_frame)
-                        
-                        if name == "Unknown Intruder" and (current_time - LAST_ALERT_TIME > 60):
-                            threading.Thread(target=send_telegram_alert, args=(capture_frame.copy(), "Unknown Person Detected!")).start()
-                            LAST_ALERT_TIME = current_time
+                        if track_id != -1 and track_id in TRACKED_FACES:
+                            # Pull from cache! Completely bypasses heavy face recognition math
+                            name, confidence_score, auth_spotted = TRACKED_FACES[track_id]
+                        else:
+                            # First time seeing this body: Isolate it and run facial recognition
+                            h = y2 - y1
+                            w = x2 - x1
+                            # Massively expand the crop upwards to guarantee the head/hairline is included
+                            # YOLO bounding boxes often cut off the top of the head which breaks Face Recognition
+                            pad_y_top = int(h * 0.35) 
+                            pad_y_bot = int(h * 0.1)
+                            pad_x = int(w * 0.2)
+                            
+                            cy1 = max(0, y1 - pad_y_top)
+                            cy2 = min(frame.shape[0], y2 + pad_y_bot)
+                            cx1 = max(0, x1 - pad_x)
+                            cx2 = min(frame.shape[1], x2 + pad_x)
+                            person_crop = frame[cy1:cy2, cx1:cx2]
+                            
+                            if person_crop.size > 0:
+                                # Adaptive Scaling: dynamically scale the image based on how far away they are
+                                crop_h = person_crop.shape[0]
+                                if crop_h < 150:
+                                    scale_factor = 2.0 # Tiny/Far away -> Upscale to find micro-faces
+                                elif crop_h < 300:
+                                    scale_factor = 1.0 # Medium distance -> Keep native resolution
+                                else:
+                                    scale_factor = 0.5 # Close up -> Shrink to conserve CPU speed
+                                    
+                                scaled_crop = cv2.resize(person_crop, (0, 0), fx=scale_factor, fy=scale_factor)
+                                rgb_crop = cv2.cvtColor(scaled_crop, cv2.COLOR_BGR2RGB)
+                                
+                                # Boost upsample accuracy to catch heavily scaled or distant faces
+                                face_locations = face_recognition.face_locations(rgb_crop, number_of_times_to_upsample=2)
+                                
+                                if len(face_locations) > 0:
+                                    # We found a face!
+                                    face_encoding = face_recognition.face_encodings(rgb_crop, face_locations)[0]
+                                    if len(known_face_encodings) > 0:
+                                        face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+                                        best_match_index = np.argmin(face_distances)
+                                        best_dist = face_distances[best_match_index]
+                                        
+                                        if best_dist <= 0.60:
+                                            name = known_face_names[best_match_index]
+                                            auth_spotted = True
+                                            confidence_score = int((1 - best_dist) * 100)
+                                        else:
+                                            name = "Unknown"
+                                            push_alert = True
+                                            confidence_score = int((1 - best_dist) * 100)
+                                    else:
+                                        name = "Unknown"
+                                        push_alert = True
+                                    
+                                    # Cache the identity to the tracker ID so we never have to run math on them again!
+                                    if track_id != -1:
+                                        TRACKED_FACES[track_id] = (name, confidence_score, auth_spotted)
 
-            # YOLO saw a human, but face recognition couldn't extract any faces (e.g. facing away)
-            # Log as Unknown Intruder instantly using body bounding frames
-            if human_in_frame and len(faces_processed) == 0:
-                intruder_spotted = True
-                name = "Unknown Intruder"
-                
-                last_seen = PERSON_COOLDOWNS.get(name, 0)
-                if current_time - last_seen > 120: # 2-minute cooldown
-                    PERSON_COOLDOWNS[name] = current_time
-                    
-                    capture_frame = frame.copy()
-                    # Find and draw YOLO body bounding box
-                    for box in results[0].boxes:
-                        if int(box.cls[0]) == 0:
-                            x1, y1, x2, y2 = map(int, box.xyxy[0])
-                            cv2.rectangle(capture_frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
-                            cv2.putText(capture_frame, "Unknown Intruder (Body Detected)", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
-                            break
-                    else:
-                        cv2.putText(capture_frame, "Unknown Intruder Detected", (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
+                        if name == "Unknown":
+                            intruder_spotted = True
                         
-                    add_detection_event("Unknown", name, 42, capture_frame)
-                    
-                    if current_time - LAST_ALERT_TIME > 60:
-                        threading.Thread(target=send_telegram_alert, args=(capture_frame.copy(), "Unknown Intruder Detected!")).start()
-                        LAST_ALERT_TIME = current_time
+                        # Add full-body bounding box to dashboard display (top, right, bottom, left format)
+                        current_faces.append(((y1, x2, y2, x1), name))
+                        
+                        # Event log & capture (with a 2-minute cooldown per person)
+                        last_seen = PERSON_COOLDOWNS.get(name, 0)
+                        if current_time - last_seen > 120:
+                            PERSON_COOLDOWNS[name] = current_time
+                            
+                            if auth_spotted:
+                                REPORT_STATS["auth_entries"] += 1
+                            else:
+                                REPORT_STATS["intruders"] += 1
+                            
+                            capture_frame = frame.copy()
+                            color = (0, 255, 0) if auth_spotted else (0, 0, 255)
+                            
+                            cv2.rectangle(capture_frame, (x1, y1), (x2, y2), color, 3)
+                            cv2.putText(capture_frame, name, (x1 + 6, y2 - 8), cv2.FONT_HERSHEY_DUPLEX, 0.7, color, 2)
+                            
+                            add_detection_event("Recognized" if auth_spotted else "Unknown", name, confidence_score, capture_frame)
+                            
+                            if push_alert and (current_time - LAST_ALERT_TIME > 60):
+                                threading.Thread(target=send_telegram_alert, args=(capture_frame.copy(), f"Alert: {name} Person Detected!")).start()
+                                LAST_ALERT_TIME = current_time
 
             # Step 3: Precise physical LED warning outputs
             if SYSTEM_STATE["tamper_alert"] or intruder_spotted:
@@ -406,6 +471,7 @@ def process_ai():
         
 threading.Thread(target=hardware_loop, daemon=True).start()
 threading.Thread(target=process_ai, daemon=True).start()
+threading.Thread(target=report_worker, daemon=True).start()
 
 # ==========================================
 # THREAD 4: THE WEB SERVER (Flask)
@@ -428,9 +494,12 @@ def generate_stream():
 
             # Overlay face bounding boxes
             for (top, right, bottom, left), name in LAST_KNOWN_FACES:
-                color = (0, 0, 255) if name == "Unknown Intruder" else (0, 255, 0)
+                color = (0, 0, 255) if name == "Unknown" else (0, 255, 0)
                 cv2.rectangle(display_frame, (left, top), (right, bottom), color, 3)
-                cv2.putText(display_frame, name, (left + 6, bottom - 6), cv2.FONT_HERSHEY_DUPLEX, 0.7, color, 1)
+                
+                # Prevent text from getting cut off at screen edges
+                text_y = top - 10 if top > 20 else top + 25
+                cv2.putText(display_frame, name, (left + 6, text_y), cv2.FONT_HERSHEY_DUPLEX, 0.7, color, 2)
 
             ret, buffer = cv2.imencode('.jpg', display_frame)
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
