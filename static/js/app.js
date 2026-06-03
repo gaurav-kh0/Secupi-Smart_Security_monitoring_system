@@ -363,8 +363,8 @@ document.addEventListener("DOMContentLoaded", () => {
     // Initial fetch trigger
     pollSensorData();
 
-    // 3-second dynamic background polling to reduce Raspberry Pi server load
-    setInterval(pollSensorData, 3000);
+    // 0.5-second dynamic background polling for true real-time sensor updates
+    setInterval(pollSensorData, 500);
     // Dismiss Warning Panel trigger
     const btnDismissAlert = document.getElementById("btn-close-alert");
     if (btnDismissAlert) {
@@ -386,7 +386,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 })
                 .then(data => {
                     aiToggle.checked = data.ai_always_on;
-                })
+                })`
                 .catch(err => {
                     console.error("AI Switch Toggle fail:", err);
                 })
