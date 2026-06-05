@@ -9,6 +9,7 @@ import os
 import datetime
 import random
 import re
+import requests
 
 app = Flask(__name__)
 
@@ -28,11 +29,50 @@ DETECTION_COUNTER = 0
 LAST_LOG_TIME = {}
 SYSTEM_LOGS = []
 
+# ==========================================
+# TELEGRAM ALERT CONFIG
+# Fill in your credentials below
+# ==========================================
+TELEGRAM_BOT_TOKEN = "8797436845:AAF6gcy2SjuqvxEvZ06jt6Th2iNbvOnw5lU"
+TELEGRAM_CHAT_ID   = "8198822394"
+
 def add_log(msg):
     time_str = datetime.datetime.now().strftime("%H:%M:%S")
     SYSTEM_LOGS.insert(0, f"[{time_str}] {msg}")
     if len(SYSTEM_LOGS) > 30:
         SYSTEM_LOGS.pop()
+
+def send_telegram_alert(img_path, name, confidence):
+    """Send a photo + caption to Telegram. Runs in a background thread so it never blocks the AI."""
+    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or TELEGRAM_CHAT_ID == "YOUR_CHAT_ID_HERE":
+        return  # Skip silently if credentials not set
+    try:
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if name == "Unknown":
+            caption = (
+                f"🚨 *INTRUDER ALERT*\n"
+                f"An unknown person was detected!\n"
+                f"📅 {now_str}\n"
+                f"📷 Camera: Main Feed\n"
+                f"⚠️ Confidence: {confidence}%"
+            )
+        else:
+            caption = (
+                f"✅ *Authorized Entry*\n"
+                f"Person: *{name}*\n"
+                f"📅 {now_str}\n"
+                f"📷 Camera: Main Feed\n"
+                f"🎯 Match Confidence: {confidence}%"
+            )
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+        with open(img_path, "rb") as photo:
+            requests.post(url, data={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "caption": caption,
+                "parse_mode": "Markdown"
+            }, files={"photo": photo}, timeout=10)
+    except Exception as e:
+        add_log(f"[Telegram ERROR] {e}")
 
 # --- Initialize AI Models ---
 print("Loading YOLO Object Detector...")
@@ -78,33 +118,68 @@ else:
 def poll_hardware():
     global MOTION_DETECTED, DISTANCE_CM, TAMPER_ALERT
     try:
-        import warnings
-        warnings.filterwarnings("ignore", module="gpiozero")
-        from gpiozero import MotionSensor, DistanceSensor
-        pir = MotionSensor(4)
-        ultrasonic = DistanceSensor(echo=17, trigger=27)
+        import RPi.GPIO as GPIO
+        PIR_PIN = 17
+        TRIG_PIN = 23
+        ECHO_PIN = 24
+        
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
+        
+        GPIO.setup(PIR_PIN, GPIO.IN)
+        GPIO.setup(TRIG_PIN, GPIO.OUT)
+        GPIO.setup(ECHO_PIN, GPIO.IN)
+        
+        GPIO.output(TRIG_PIN, False)
+        time.sleep(2) # Give ultrasonic sensor time to settle
         has_hw = True
-    except:
+    except Exception as e:
+        print(f"Hardware init error: {e}")
         has_hw = False
         
     while True:
         try:
             if has_hw:
-                raw_dist = ultrasonic.distance
-                if raw_dist <= 0.01 or raw_dist >= 0.99:
-                    # Sensor is shorted (0.0) or maxed out (1.0). Force simulation to animate UI
+                # --- 1. Read PIR Sensor ---
+                if GPIO.input(PIR_PIN):
+                    MOTION_DETECTED = True
+                else:
+                    MOTION_DETECTED = False
+
+                # --- 2. Read Ultrasonic Sensor ---
+                GPIO.output(TRIG_PIN, True)
+                time.sleep(0.00001)
+                GPIO.output(TRIG_PIN, False)
+
+                pulse_start = time.time()
+                pulse_end = time.time()
+
+                # Timeout loops to prevent script from hanging if wire is loose
+                timeout = time.time() + 0.1
+                while GPIO.input(ECHO_PIN) == 0 and time.time() < timeout:
+                    pulse_start = time.time()
+
+                timeout = time.time() + 0.1
+                while GPIO.input(ECHO_PIN) == 1 and time.time() < timeout:
+                    pulse_end = time.time()
+
+                pulse_duration = pulse_end - pulse_start
+                raw_dist_cm = round(pulse_duration * 17150, 1)
+
+                # Fallback to simulation if readings are impossible (shorted)
+                if raw_dist_cm <= 1.0 or raw_dist_cm >= 400.0:
                     import math
                     MOTION_DETECTED = random.random() > 0.85
                     DISTANCE_CM = round(150 + (math.sin(time.time() / 2.0) * 50), 1)
                 else:
-                    MOTION_DETECTED = pir.motion_detected
-                    DISTANCE_CM = round(raw_dist * 100, 1)
+                    DISTANCE_CM = raw_dist_cm
             else:
+                # Windows/No-hardware fallback simulation
                 import math
                 MOTION_DETECTED = random.random() > 0.85
                 DISTANCE_CM = round(150 + (math.sin(time.time() / 2.0) * 50), 1)
         except Exception as e:
-            # If the hardware sensor throws a fatal error, fallback to simulation
+            # Fatal error fallback
             import math
             MOTION_DETECTED = random.random() > 0.85
             DISTANCE_CM = round(150 + (math.sin(time.time() / 2.0) * 50), 1)
@@ -142,7 +217,7 @@ def process_ai():
             time.sleep(0.02)
             continue
             
-        if not AI_ALWAYS_ON and not MOTION_DETECTED:
+        if not AI_ALWAYS_ON:
             time.sleep(0.1)
             continue
             
@@ -235,6 +310,13 @@ def process_ai():
                         add_log(f"Recognized: {name} with {confidence_score}% confidence")
                     else:
                         add_log(f"ALERT: Unknown Intruder detected! (Confidence: {confidence_score}%)")
+
+                    # Fire Telegram alert in background thread so AI is never blocked
+                    threading.Thread(
+                        target=send_telegram_alert,
+                        args=(img_path, name, confidence_score),
+                        daemon=True
+                    ).start()
         
         LAST_KNOWN_OBJECTS = current_objects
         LAST_KNOWN_FACES = current_faces

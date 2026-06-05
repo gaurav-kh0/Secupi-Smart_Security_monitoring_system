@@ -119,10 +119,11 @@ function pollSensorData() {
                 pirPill.style.background = "var(--bg-alt)";
             }
 
-            // Proximity Pill
+            // Proximity Pill - safe guard: distance might not always be a number
             const distPill = document.getElementById("sensor-dist");
             const valDistance = document.getElementById("val-distance");
-            valDistance.innerText = data.distance.toFixed(1);
+            const distNum = parseFloat(data.distance);
+            valDistance.innerText = isNaN(distNum) ? "--" : distNum.toFixed(1);
             if (data.tamper_alert) {
                 valDistance.style.color = "var(--danger)";
                 distPill.style.borderColor = "rgba(239, 68, 68, 0.4)";
@@ -180,63 +181,54 @@ function pollSensorData() {
             }
 
             // 5. RENDER LATEST CAPTURED DETECTION CARD
-            const detTime = document.getElementById("det-time");
-            const detDate = document.getElementById("det-date");
-            const detStatus = document.getElementById("det-status");
-            const latestImg = document.getElementById("latest-img");
+            const detTime    = document.getElementById("det-time");
+            const detDate    = document.getElementById("det-date");
+            const detStatus  = document.getElementById("det-status");
+            const latestImg  = document.getElementById("latest-img");
             const latestEmpty = document.getElementById("latest-empty");
 
-            if (latestDet) {
-                detTime.innerText = latestDet.time;
-                detDate.innerText = latestDet.date;
-                detStatus.innerText = `${latestDet.name !== "—" ? latestDet.name : "Unknown Intruder"} (${latestDet.confidence}% Match)`;
-                latestImg.src = latestDet.imageUrl;
+            if (latestDet && detTime && detDate && detStatus) {
+                detTime.innerText   = latestDet.time   || "--";
+                detDate.innerText   = latestDet.date   || "--";
+                detStatus.innerText = `${latestDet.name && latestDet.name !== "—" ? latestDet.name : "Unknown"} (${latestDet.confidence}% Match)`;
 
-                latestImg.onload = () => {
-                    latestImg.classList.remove("hidden");
-                    latestEmpty.classList.add("hidden");
-                };
-
-                latestImg.onerror = () => {
-                    latestImg.classList.add("hidden");
-                    latestEmpty.classList.remove("hidden");
-                    latestEmpty.innerHTML = `
-                        <i class="fa-solid fa-image-slash"></i>
-                        <span>Capture load error</span>
-                    `;
-                };
-
-                // Store click details
+                if (latestImg) {
+                    latestImg.src = latestDet.imageUrl;
+                    latestImg.onerror = () => { latestImg.onerror = null; latestImg.src = "/static/captures/sample.png"; };
+                    latestImg.onload  = () => { latestImg.classList.remove("hidden"); if (latestEmpty) latestEmpty.classList.add("hidden"); };
+                }
                 const cardFrame = document.getElementById("latest-frame");
-                cardFrame.onclick = () => openDetailModal(latestDet);
-                cardFrame.style.cursor = "pointer";
-            } else {
-                detTime.innerText = "—";
-                detDate.innerText = "—";
+                if (cardFrame) { cardFrame.onclick = () => openDetailModal(latestDet); cardFrame.style.cursor = "pointer"; }
+            } else if (detTime) {
+                detTime.innerText  = "—";
+                detDate.innerText  = "—";
                 detStatus.innerText = "—";
-                latestImg.classList.add("hidden");
-                latestEmpty.classList.remove("hidden");
+                if (latestImg)   latestImg.classList.add("hidden");
+                if (latestEmpty) latestEmpty.classList.remove("hidden");
             }
             
             // 5.5 RENDER SERVER SYSTEM LOGS
             const logsList = document.getElementById("server-logs-list");
-            if (logsList && data.logs) {
-                if (data.logs.length === 0) {
-                    logsList.innerHTML = `<li style="color:#888;">[System] No logs yet...</li>`;
+            if (logsList) {
+                const logs = data.logs || [];
+                if (logs.length === 0) {
+                    logsList.innerHTML = `<li style="color:#888;">[System] No events logged yet...</li>`;
                 } else {
                     logsList.innerHTML = "";
-                    data.logs.forEach(log => {
+                    logs.forEach(log => {
                         const li = document.createElement("li");
                         li.innerText = log;
                         if (log.includes("ALERT") || log.includes("Intruder") || log.includes("Tamper")) {
                             li.style.color = "#ff4444";
                         } else if (log.includes("Recognized") || log.includes("Match")) {
                             li.style.color = "#44ff44";
+                        } else {
+                            li.style.color = "#aaa";
                         }
                         logsList.appendChild(li);
                     });
                 }
-            }
+            } // end if(logsList)
 
             // 6. RENDER UNKNOWN ALERTS LIST
             const unknownContainer = document.getElementById("unknown-alerts-container");
@@ -244,49 +236,39 @@ function pollSensorData() {
 
             if (unknownDetections.length === 0) {
                 unknownContainer.innerHTML = `
-                    <div class="alerts-clear-card" style="grid-column: 1 / -1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.6rem; padding:2rem; background:rgba(34, 197, 94, 0.08); border:1.5px dashed rgba(34, 197, 94, 0.3); border-radius:var(--radius); color:#15803D;">
+                    <div style="grid-column:1/-1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.6rem; padding:2rem; background:rgba(34,197,94,0.08); border:1.5px dashed rgba(34,197,94,0.3); border-radius:var(--radius); color:#15803D;">
                         <i class="fa-solid fa-shield-halved" style="font-size:2rem;"></i>
                         <span style="font-weight:600;">No Active Intruder Warnings &bull; All Systems Normal</span>
                     </div>
                 `;
             } else {
                 unknownContainer.innerHTML = "";
-                // Limit to top 2 warnings
-                unknownDetections.slice(0, 2).forEach((alert, idx) => {
+                // Show all unknown warnings (not capped at 2)
+                unknownDetections.forEach((alert, idx) => {
                     const card = document.createElement("div");
-                    card.className = "unknown-alert-card";
-                    card.style.background = "var(--card)";
-                    card.style.border = "1.5px solid rgba(239, 68, 68, 0.3)";
-                    card.style.borderRadius = "var(--radius)";
-                    card.style.boxShadow = "var(--shadow)";
-                    card.style.padding = "1.5rem";
-                    card.style.display = "flex";
-                    card.style.flexDirection = "column";
-                    card.style.gap = "1.2rem";
-                    card.style.animation = `fadeCard 0.4s ease both`;
-                    card.style.animationDelay = `${idx * 0.1}s`;
-                    card.style.cursor = "pointer";
+                    card.style.cssText = "background:var(--card); border:1.5px solid rgba(239,68,68,0.35); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.5rem; display:flex; flex-direction:column; gap:1.2rem; cursor:pointer;";
 
+                    const imgSrc = alert.imageUrl || "/static/captures/sample.png";
                     card.innerHTML = `
-                        <div class="unknown-alert-header" style="display:flex; align-items:center; gap:0.6rem; font-weight:700; color:var(--danger); border-bottom:1.5px solid var(--border); padding-bottom:0.75rem;">
+                        <div style="display:flex; align-items:center; gap:0.6rem; font-weight:700; color:var(--danger); border-bottom:1.5px solid var(--border); padding-bottom:0.75rem;">
                             <i class="fa-solid fa-triangle-exclamation"></i>
-                            <span style="flex-grow:1; letter-spacing:-0.2px;">🚨 INTRUDER WARNING</span>
-                            <span class="alert-priority-badge" style="font-size:0.65rem; background:rgba(239, 68, 68, 0.15); padding:0.2rem 0.6rem; border-radius:10px;">HIGH PRIORITY</span>
+                            <span style="flex-grow:1;">🚨 INTRUDER WARNING</span>
+                            <span style="font-size:0.65rem; background:rgba(239,68,68,0.15); padding:0.2rem 0.6rem; border-radius:10px; color:var(--danger);">HIGH PRIORITY</span>
                         </div>
-                        <div class="unknown-alert-body" style="display:grid; grid-template-columns: 1fr 1.6fr; gap:1.2rem;">
-                            <div class="unknown-alert-img" style="aspect-ratio:4/3; border-radius:var(--radius-sm); overflow:hidden; border:1px solid var(--border); background:var(--bg-alt); display:flex; align-items:center; justify-content:center;">
-                                <img src="${alert.imageUrl}" alt="Intruder Snapshot" style="width:100%; height:100%; object-fit:cover;" onerror="this.src='/static/captures/sample.png'">
+                        <div style="display:grid; grid-template-columns:1fr 1.6fr; gap:1.2rem;">
+                            <div style="aspect-ratio:4/3; border-radius:var(--radius-sm); overflow:hidden; border:1px solid var(--border); background:var(--bg-alt);">
+                                <img src="${imgSrc}" alt="Intruder" style="width:100%; height:100%; object-fit:cover;"
+                                     onerror="this.onerror=null; this.src='/static/captures/sample.png';">
                             </div>
-                            <div class="unknown-alert-details" style="display:flex; flex-direction:column; gap:0.4rem; font-size:0.8rem;">
-                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Timestamp:</span><span style="font-weight:600;">${alert.time}</span></div>
-                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Camera:</span><span style="font-weight:600;">${alert.camera}</span></div>
-                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Log ID:</span><span style="font-weight:600; font-family:monospace;">#${alert.id}</span></div>
-                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Match Prob:</span><span style="font-weight:600; color:var(--danger);">${alert.confidence}%</span></div>
+                            <div style="display:flex; flex-direction:column; gap:0.5rem; font-size:0.82rem;">
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Time:</span><strong>${alert.time}</strong></div>
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Date:</span><strong>${alert.date}</strong></div>
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Camera:</span><strong>${alert.camera}</strong></div>
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Log ID:</span><strong style="font-family:monospace;">#${alert.id}</strong></div>
+                                <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-muted);">Confidence:</span><strong style="color:var(--danger);">${alert.confidence}%</strong></div>
                             </div>
                         </div>
                     `;
-
-                    // Bind detailed modal click
                     card.onclick = () => openDetailModal(alert);
                     unknownContainer.appendChild(card);
                 });
@@ -386,7 +368,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 })
                 .then(data => {
                     aiToggle.checked = data.ai_always_on;
-                })`
+                })
                 .catch(err => {
                     console.error("AI Switch Toggle fail:", err);
                 })
