@@ -37,8 +37,8 @@ FACES_IN_FRAME = set()
 # ==========================================
 # TELEGRAM ALERT CONFIG
 # ==========================================
-TELEGRAM_BOT_TOKEN = "8797436845:AAF6gcy2SjuqvxEvZ06jt6Th2iNbvOnw5lU"
-TELEGRAM_CHAT_ID   = "8198822394"
+TELEGRAM_BOT_TOKEN = "from @BotFather"
+TELEGRAM_CHAT_ID   = "from @userinfobot"
 
 def add_log(msg):
     time_str = datetime.datetime.now().strftime("%H:%M:%S")
